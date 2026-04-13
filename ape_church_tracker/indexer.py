@@ -21,6 +21,7 @@ from rich.logging import RichHandler
 from sqlalchemy.engine import Engine
 from web3 import Web3
 
+from .apescan import Apescan
 from .config import GameConfig, Settings, load_all_game_configs, load_game_config, load_settings
 from .db import (
     block_reconciliation as recon_table,
@@ -40,6 +41,7 @@ from .decoder import (
     Flow,
     build_topic_index,
     classify_flows,
+    classify_native_flows,
     decode_game_events,
     extract_erc20_flows,
 )
@@ -377,6 +379,191 @@ def backfill_game(
         window = min(settings.indexer_window, int(window * 1.5) + 1)
 
 
+# ---------- native-APE indexing (apescan-backed) ----------------------------
+
+
+def _native_balance_delta(w3: Web3, holder: str, block_number: int) -> int:
+    holder_cs = to_checksum_address(holder)
+    before = with_retry(lambda: w3.eth.get_balance(holder_cs, block_identifier=block_number - 1))
+    after = with_retry(lambda: w3.eth.get_balance(holder_cs, block_identifier=block_number))
+    return int(after) - int(before)
+
+
+def backfill_native_game(
+    w3: Web3,
+    engine: Engine,
+    cfg: GameConfig,
+    settings: Settings,
+    once: bool = False,
+) -> None:
+    """Index a native-APE game via Apescan's txlist + txlistinternal.
+
+    Workflow per range:
+      1. `txlist(game)` → every external tx where game is to/from. The `value`
+         field is the player's wager (`msg.value`).
+      2. `txlistinternal(game)` → every internal call where game is to/from.
+         These are the fee and payout outflows.
+      3. Join on `tx_hash`, build Flow rows via `classify_native_flows`.
+      4. Block-level reconciliation via `eth_getBalance`.
+    """
+    if cfg.is_placeholder:
+        log.warning("game %s still has placeholder address, skipping", cfg.name)
+        return
+
+    label_map = {
+        addr.lower(): meta.model_dump()
+        for addr, meta in cfg.labels.items()
+        if not addr.startswith("0xFILL_ME")
+    }
+    upsert_labels(engine, cfg.name, label_map)
+
+    apescan = Apescan(
+        base_url=settings.apescan_base_url,
+        api_key=settings.apescan_api_key,
+    )
+
+    last = get_last_block(engine, cfg.name)
+    if last is not None:
+        from_block = last + 1
+    elif cfg.start_block > 0:
+        from_block = cfg.start_block
+    else:
+        discovered = apescan.contract_creation_block(cfg.address)
+        if discovered is None:
+            log.error("[%s] could not discover deploy block", cfg.name)
+            return
+        log.info("[%s] discovered deploy block: %d", cfg.name, discovered)
+        from_block = discovered
+
+    window = settings.indexer_window
+
+    while True:
+        head = with_retry(lambda: w3.eth.block_number)
+        if from_block > head:
+            if once:
+                return
+            time.sleep(settings.tail_interval)
+            continue
+
+        to_block = min(from_block + window - 1, head)
+        log.info("[%s] scanning blocks %d..%d (head=%d)", cfg.name, from_block, to_block, head)
+
+        try:
+            ext_txs = apescan.txlist(cfg.address, from_block, to_block)
+            int_txs = apescan.txlistinternal(
+                address=cfg.address, start_block=from_block, end_block=to_block
+            )
+        except Exception as exc:
+            log.error("apescan fetch failed: %s; halving window", exc)
+            window = max(50, window // 2)
+            continue
+
+        # Index txs by hash: for each tx we need value/from/to + list of internals.
+        per_tx: Dict[str, Dict[str, object]] = {}
+        for t in ext_txs:
+            if t.is_error:
+                continue
+            per_tx[t.tx_hash] = {
+                "block": t.block_number,
+                "ts": t.timestamp,
+                "tx_from": t.from_addr,
+                "tx_to": t.to_addr,
+                "value": t.value_wei,
+                "internals": [],
+            }
+        for it in int_txs:
+            if it.is_error:
+                continue
+            rec = per_tx.setdefault(
+                it.parent_tx_hash,
+                {
+                    "block": it.block_number,
+                    "ts": it.timestamp,
+                    "tx_from": "",
+                    "tx_to": "",
+                    "value": 0,
+                    "internals": [],
+                },
+            )
+            rec["internals"].append((it.trace_id, it.from_addr, it.to_addr, it.value_wei))
+
+        fls: List[dict] = []
+        for tx_hash, rec in per_tx.items():
+            flows_native = classify_native_flows(
+                tx_hash=tx_hash,
+                block_number=int(rec["block"]),
+                tx_from=str(rec["tx_from"]),
+                tx_to=str(rec["tx_to"]),
+                tx_value_wei=int(rec["value"]),
+                internal_txs=list(rec["internals"]),  # type: ignore[arg-type]
+                game_address=cfg.address,
+                label_map=label_map,
+            )
+            for f in flows_native:
+                fls.append(
+                    {
+                        "game": cfg.name,
+                        "tx_hash": f.tx_hash,
+                        "log_index": f.log_index,
+                        "block_number": f.block_number,
+                        "ts": int(rec["ts"]),
+                        "direction": f.direction,
+                        "token": f.token,
+                        "amount_raw": str(f.amount_raw),
+                        "counterparty": f.counterparty,
+                        "category": f.category,
+                        "label_name": f.label_name,
+                    }
+                )
+
+        # Block-level reconciliation for native: per block, sum(in) - sum(out)
+        # must equal the contract's native balance delta across that block.
+        recs: List[dict] = []
+        per_block: Dict[int, List[int]] = {}
+        for r in fls:
+            blk = int(r["block_number"])
+            s_in, s_out = per_block.get(blk, [0, 0])
+            amt = int(r["amount_raw"])
+            if r["direction"] == "in":
+                s_in += amt
+            else:
+                s_out += amt
+            per_block[blk] = [s_in, s_out]
+        for blk, (s_in, s_out) in per_block.items():
+            try:
+                delta = _native_balance_delta(w3, cfg.address, blk)
+            except Exception as exc:
+                log.warning("balance delta failed for block %d: %s", blk, exc)
+                continue
+            ok = 1 if (s_in - s_out) == delta else 0
+            recs.append(
+                {
+                    "game": cfg.name,
+                    "block_number": blk,
+                    "token": "native",
+                    "sum_in_raw": str(s_in),
+                    "sum_out_raw": str(s_out),
+                    "balance_delta_raw": str(delta),
+                    "ok": ok,
+                }
+            )
+
+        with engine.begin() as conn:
+            insert_many_ignore(conn, flows_table, fls)
+            insert_many_ignore(conn, recon_table, recs)
+            set_last_block(conn, cfg.name, to_block)
+
+        unlabeled = sum(1 for f in fls if f["category"].startswith("UNLABELED"))
+        if fls:
+            log.info(
+                "[%s] %d txs, %d flows (%d UNLABELED), %d recon rows",
+                cfg.name, len(per_tx), len(fls), unlabeled, len(recs),
+            )
+
+        from_block = to_block + 1
+        window = min(settings.indexer_window, int(window * 1.5) + 1)
+
+
 def run_relabel(settings: Settings, game_name: Optional[str]) -> None:
     engine = get_engine(settings.db_path)
     configs = [load_game_config(game_name)] if game_name else load_all_game_configs()
@@ -422,7 +609,10 @@ def main() -> None:
         return
 
     for cfg in configs:
-        backfill_game(w3, engine, cfg, settings, once=args.once)
+        if cfg.native_only:
+            backfill_native_game(w3, engine, cfg, settings, once=args.once)
+        else:
+            backfill_game(w3, engine, cfg, settings, once=args.once)
 
 
 if __name__ == "__main__":

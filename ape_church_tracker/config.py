@@ -38,14 +38,19 @@ class EventMapping(BaseModel):
 class GameConfig(BaseModel):
     name: str
     address: str
-    abi_path: str
-    start_block: int
+    abi_path: Optional[str] = None  # optional — unverified contracts don't have one
+    start_block: int = 0
     tokens: Dict[str, TokenConfig] = Field(default_factory=dict)
     events: EventMapping = Field(default_factory=EventMapping)
     labels: Dict[str, LabelConfig] = Field(default_factory=dict)
 
     # Resolved at load time
     abi: List[dict] = Field(default_factory=list)
+
+    @property
+    def native_only(self) -> bool:
+        """True when the only tracked token is native APE."""
+        return list(self.tokens.keys()) == ["native"]
 
     @field_validator("address")
     @classmethod
@@ -78,6 +83,8 @@ class GameConfig(BaseModel):
 
 class Settings(BaseModel):
     rpc_url: str
+    apescan_base_url: str
+    apescan_api_key: str
     db_path: str
     config_dir: str
     indexer_window: int
@@ -87,6 +94,8 @@ class Settings(BaseModel):
 def load_settings() -> Settings:
     return Settings(
         rpc_url=os.environ.get("RPC_URL", "https://rpc.apechain.com"),
+        apescan_base_url=os.environ.get("APESCAN_BASE_URL", "https://api.apescan.io/api"),
+        apescan_api_key=os.environ.get("APESCAN_API_KEY", ""),
         db_path=os.environ.get("DB_PATH", "pnl.db"),
         config_dir=os.environ.get("CONFIG_DIR", "config/games"),
         indexer_window=int(os.environ.get("INDEXER_WINDOW", "2000")),
@@ -104,11 +113,17 @@ def load_game_config(name: str, config_dir: Optional[str] = None) -> GameConfig:
     # Drop any comment fields that start with '$'
     raw = {k: v for k, v in raw.items() if not k.startswith("$")}
     cfg = GameConfig.model_validate(raw)
-    abi_path = Path(cfg.abi_path)
-    if not abi_path.is_absolute():
-        abi_path = Path.cwd() / abi_path
-    if abi_path.exists():
-        cfg.abi = json.loads(abi_path.read_text())
+    if cfg.abi_path:
+        abi_path = Path(cfg.abi_path)
+        if not abi_path.is_absolute():
+            abi_path = Path.cwd() / abi_path
+        if abi_path.exists():
+            try:
+                parsed = json.loads(abi_path.read_text())
+                if isinstance(parsed, list):
+                    cfg.abi = parsed
+            except json.JSONDecodeError:
+                pass
     return cfg
 
 

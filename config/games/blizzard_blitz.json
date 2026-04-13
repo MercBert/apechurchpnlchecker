@@ -1,19 +1,16 @@
 {
-  "$comment": "Fill this in with real values before running the indexer. Placeholders are marked 0xFILL_ME or FILL_ME.",
+  "$comment": "Blizzard Blitz cascade slot on ape.church. Native-APE game — wagers arrive as msg.value; fees/payouts go out as internal transactions. Contract is unverified so no ABI; we classify by counterparty, not by event.",
+  "$discover_labels": [
+    "Run: python scripts/inspect_tx.py blizzard_blitz 0x45c32a21ab454291bfb30f90577c492b9280821eddbc710a30d7bfe550c0ece4",
+    "It will print every internal transaction from the game contract and tell you which counterparties are still UNLABELED.",
+    "Paste each address into the 'labels' dict below with a category: 'protocol_fee' | 'partner_fee' | 'house' | 'jackpot_pool' | 'referral' | or a custom name.",
+    "Hint from the reference tx: one address starts with 0x20852d and ends in 697da5f51 (takes ~89% of the 5% fee); another starts with 0x258f9Ead and ends in d36f98563 (takes ~10%)."
+  ],
   "name": "blizzard_blitz",
-  "address": "0xFILL_ME_BLIZZARD_BLITZ_CONTRACT",
-  "abi_path": "config/games/blizzard_blitz.abi.json",
+  "address": "0x64b27c1c69559A795C98958614398dD7195AE1B8",
   "start_block": 0,
   "tokens": {
     "native": {"symbol": "APE", "decimals": 18}
   },
-  "events": {
-    "wager": "Wager",
-    "payout": "Payout"
-  },
-  "labels": {
-    "0xFILL_ME_APE_CHURCH_PROTOCOL_FEE_WALLET": {"category": "protocol_fee", "name": "ape.church protocol"},
-    "0xFILL_ME_HOUSE_TREASURY":                 {"category": "house",        "name": "house treasury"},
-    "0xFILL_ME_JACKPOT_POOL":                   {"category": "jackpot_pool", "name": "progressive jackpot"}
-  }
+  "labels": {}
 }

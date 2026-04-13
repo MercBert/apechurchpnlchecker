@@ -1,12 +1,14 @@
 """Flow extraction + classification.
 
-Given a tx receipt and a game config, produce:
-  - decoded game events (from the configured ABI)
-  - a list of `Flow` records: every ERC-20 Transfer touching the game contract,
-    classified by direction, token, counterparty, and category.
+Two modes:
+  - **Log-based** (`extract_erc20_flows`, `classify_flows`): for games that
+    move value via ERC-20 Transfer events. Works on any RPC.
+  - **Native** (`classify_native_flows`): for games that use `msg.value` and
+    distribute fees/payouts via internal transactions. Requires the caller
+    to supply a list of internal transactions (from apescan or trace RPC).
 
-Native-value flows are handled by `trace.py` (optional, RPC-dependent); this
-module focuses on log-based extraction which works on any RPC.
+Both converge on the same `Flow` dataclass and the same classification rules
+(counterparty labels + payout-back-to-sender heuristic).
 """
 
 from __future__ import annotations
@@ -271,3 +273,134 @@ def classify_flows(
         )
 
     return out
+
+
+# ---------- native-APE flow classification ----------------------------------
+
+
+def classify_native_flows(
+    tx_hash: str,
+    block_number: int,
+    tx_from: str,
+    tx_to: str,
+    tx_value_wei: int,
+    internal_txs: List[Tuple[int, str, str, int]],
+    game_address: str,
+    label_map: Dict[str, dict],
+) -> List[Flow]:
+    """Build Flow rows for a native-APE tx.
+
+    Parameters
+    ----------
+    tx_hash, block_number : tx identity
+    tx_from, tx_to        : tx `from`/`to` (the caller and the direct callee)
+    tx_value_wei          : `msg.value` on the outer call (wei)
+    internal_txs          : list of (trace_id, from, to, value_wei) for every
+                            internal call where game is sender or receiver.
+                            `trace_id` is used to build a deterministic
+                            composite log_index so rows are idempotent.
+    game_address          : the game contract (checksum or any case)
+    label_map             : {lowercase_address: {"category":..., "name":...}}
+
+    Classification:
+      - inbound with counterparty == tx_from → category 'wager'
+        (the player sent APE as msg.value)
+      - outbound with counterparty == tx_from → category 'payout'
+        (the contract is sending APE back to the player in the same tx)
+      - outbound with counterparty in label_map → use the label's category
+      - everything else → 'UNLABELED' / 'UNLABELED_IN'
+    """
+    game_lower = game_address.lower()
+    tx_from_lower = (tx_from or "").lower()
+    out: List[Flow] = []
+
+    # 1. Outer `msg.value` — an implicit inbound flow from tx.from to tx.to
+    #    (the game contract). We give it a stable, reserved log_index of -1.
+    if tx_value_wei > 0 and tx_to.lower() == game_lower:
+        category = "wager"  # player → game
+        label_name: Optional[str] = None
+        # If the sender is actually a labeled address, respect the label.
+        lbl = label_map.get(tx_from_lower)
+        if lbl:
+            category = lbl["category"]
+            label_name = lbl["name"]
+        out.append(
+            Flow(
+                tx_hash=tx_hash,
+                log_index=-1,  # sentinel for outer msg.value
+                block_number=block_number,
+                direction="in",
+                token="native",
+                amount_raw=int(tx_value_wei),
+                counterparty=tx_from_lower,
+                category=category,
+                label_name=label_name,
+            )
+        )
+
+    # 2. Internal txs where the game contract is from or to.
+    for trace_id_raw, ifrom, ito, ivalue in internal_txs:
+        if ivalue <= 0:
+            continue
+        if ifrom.lower() == game_lower:
+            direction = "out"
+            counterparty = ito.lower()
+        elif ito.lower() == game_lower:
+            direction = "in"
+            counterparty = ifrom.lower()
+        else:
+            continue
+
+        category = "UNLABELED" if direction == "out" else "UNLABELED_IN"
+        label_name = None
+        lbl = label_map.get(counterparty)
+        if lbl:
+            category = lbl["category"]
+            label_name = lbl["name"]
+        elif direction == "out" and counterparty == tx_from_lower:
+            category = "payout"
+        elif direction == "in" and counterparty == tx_from_lower:
+            category = "wager"
+
+        # trace_id may look like "0", "0_1", "call_3", etc. We encode it
+        # into an integer log_index by hashing. Collisions within a single
+        # tx are extremely unlikely given typical trace depths, but we use
+        # a small offset from -2 downward to keep it distinct from the
+        # reserved -1 for msg.value.
+        try:
+            composite = -(abs(hash(trace_id_raw)) % 1_000_000_000 + 2)
+        except Exception:
+            composite = -2
+
+        out.append(
+            Flow(
+                tx_hash=tx_hash,
+                log_index=composite,
+                block_number=block_number,
+                direction=direction,
+                token="native",
+                amount_raw=int(ivalue),
+                counterparty=counterparty,
+                category=category,
+                label_name=label_name,
+            )
+        )
+
+    # Deduplicate by (direction, counterparty, amount_raw) — some apescan
+    # responses include the same internal tx twice with different trace_ids.
+    # Keep the first occurrence and renumber log_index densely so SQLite PK
+    # collisions don't happen on re-runs.
+    seen = set()
+    deduped: List[Flow] = []
+    for f in out:
+        key = (f.direction, f.counterparty, f.amount_raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(f)
+
+    # Re-assign stable negative log_index by position so PKs are deterministic.
+    for i, f in enumerate(deduped):
+        f.log_index = -1 - i  # -1, -2, -3, …
+
+    return deduped
