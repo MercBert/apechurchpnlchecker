@@ -94,7 +94,9 @@ class Settings(BaseModel):
 def load_settings() -> Settings:
     return Settings(
         rpc_url=os.environ.get("RPC_URL", "https://rpc.apechain.com"),
-        apescan_base_url=os.environ.get("APESCAN_BASE_URL", "https://api.apescan.io/api"),
+        apescan_base_url=os.environ.get(
+            "APESCAN_BASE_URL", "https://api.etherscan.io/v2/api"
+        ),
         apescan_api_key=os.environ.get("APESCAN_API_KEY", ""),
         db_path=os.environ.get("DB_PATH", "pnl.db"),
         config_dir=os.environ.get("CONFIG_DIR", "config/games"),

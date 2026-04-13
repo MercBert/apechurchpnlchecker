@@ -1,16 +1,20 @@
-"""Thin client for the Apescan (etherscan-compatible) HTTP API.
+"""Thin client for the Etherscan v2 Multichain API (which serves Apescan).
 
-We use Apescan instead of raw RPC for two reasons:
-  1. Native-APE moves happen via internal transactions, which plain
-     `eth_getLogs` can't see. `account.txlistinternal` exposes them.
-  2. It saves us from needing a trace-enabled RPC.
+Etherscan consolidated all its chain-family APIs — including Apescan — into
+a single multichain v2 endpoint. You request a specific chain by passing
+`chainid` in every call; Ape Chain is 33139. The API key you generate at
+https://apescan.io/myapikey is an Etherscan key that works for every chain
+in the family (Ethereum, Apescan, Basescan, etc.).
 
-Free API keys: https://apescan.io/myapikey  (set APESCAN_API_KEY in .env)
+Endpoints we call:
+  - `account.txlist`            — external txs for an address
+  - `account.txlistinternal`    — internal txs for an address OR a single txhash
+  - `contract.getcontractcreation`
 
-All endpoints return JSON of shape:
+All return JSON of shape:
     {"status": "1"|"0", "message": ..., "result": [...]}
 
-`status == "0"` with `message == "No transactions found"` is *not* an error —
+`status == "0"` with `message` like "No transactions found" is *not* an error —
 it just means the address/range is empty. We translate that to `[]`.
 """
 
@@ -25,6 +29,14 @@ from typing import Any, Dict, List, Optional
 
 
 log = logging.getLogger(__name__)
+
+
+APECHAIN_CHAIN_ID = "33139"
+
+# Cloudflare in front of etherscan blocks requests with a default urllib UA.
+_USER_AGENT = (
+    "ape-church-tracker/0.1 (+https://github.com/MercBert/apechurchpnlchecker)"
+)
 
 
 @dataclass
@@ -58,13 +70,15 @@ class ApescanError(RuntimeError):
 class Apescan:
     def __init__(
         self,
-        base_url: str = "https://api.apescan.io/api",
+        base_url: str = "https://api.etherscan.io/v2/api",
         api_key: str = "",
+        chain_id: str = APECHAIN_CHAIN_ID,
         rate_sleep: float = 0.25,
         timeout: float = 30.0,
     ):
         self.base_url = base_url.rstrip("?&")
         self.api_key = api_key or ""
+        self.chain_id = chain_id
         self.rate_sleep = rate_sleep
         self.timeout = timeout
         self._last_call: float = 0.0
@@ -72,9 +86,11 @@ class Apescan:
     # ---- plumbing --------------------------------------------------------
 
     def _request(self, params: Dict[str, str]) -> Any:
+        # Always include chainid for the v2 multichain endpoint.
+        merged = {"chainid": self.chain_id, **params}
         if self.api_key:
-            params = {**params, "apikey": self.api_key}
-        query = urllib.parse.urlencode(params)
+            merged["apikey"] = self.api_key
+        query = urllib.parse.urlencode(merged)
         url = f"{self.base_url}?{query}"
 
         # simple client-side rate limit
@@ -82,18 +98,23 @@ class Apescan:
         if delta < self.rate_sleep:
             time.sleep(self.rate_sleep - delta)
 
+        last_exc: Optional[Exception] = None
         for attempt in range(5):
             try:
-                with urllib.request.urlopen(url, timeout=self.timeout) as resp:
+                req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = resp.read()
                 self._last_call = time.monotonic()
                 break
-            except Exception as exc:  # network blip
+            except Exception as exc:  # network blip / 403 / 429 / timeout
+                last_exc = exc
                 wait = 2 ** attempt
                 log.warning("apescan request failed (%s); retrying in %.1fs", exc, wait)
                 time.sleep(wait)
         else:
-            raise ApescanError(f"apescan request failed after retries: {url}")
+            raise ApescanError(
+                f"apescan request failed after retries: {last_exc} url={url}"
+            )
 
         import json  # local import keeps top-level import list short
 
