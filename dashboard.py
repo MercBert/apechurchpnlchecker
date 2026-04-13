@@ -24,13 +24,15 @@ st.set_page_config(
 
 
 # Streamlit 1.30+ supports st.Page + st.navigation with `render` callables.
+# Every page function is named `render`, so we pass explicit url_path values
+# to avoid "URL pathnames must be unique" collisions.
 PAGES = [
-    st.Page(summary.render,  title="Executive Summary", icon="📊", default=True),
-    st.Page(games.render,    title="Games",             icon="🎰"),
-    st.Page(treasury.render, title="Treasury",          icon="🏦"),
-    st.Page(house.render,    title="House staking",     icon="🏠"),
-    st.Page(nft.render,      title="NFT royalties",     icon="🖼️"),
-    st.Page(health.render,   title="System health",     icon="🩺"),
+    st.Page(summary.render,  title="Executive Summary", icon="📊", url_path="summary", default=True),
+    st.Page(games.render,    title="Games",             icon="🎰", url_path="games"),
+    st.Page(treasury.render, title="Treasury",          icon="🏦", url_path="treasury"),
+    st.Page(house.render,    title="House staking",     icon="🏠", url_path="house"),
+    st.Page(nft.render,      title="NFT royalties",     icon="🖼️", url_path="nft"),
+    st.Page(health.render,   title="System health",     icon="🩺", url_path="health"),
 ]
 
 
