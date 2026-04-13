@@ -187,3 +187,212 @@ def sync_status(engine: Engine, game: str) -> Optional[int]:
             {"g": game},
         ).first()
         return int(row[0]) if row else None
+
+
+# --------------------------------------------------------------------------
+# Cross-tracker rollups for the team dashboard
+# --------------------------------------------------------------------------
+
+
+def _native_amount(raw: object) -> float:
+    """Convert a wei-valued base-unit amount (float or string) to native APE/ETH
+    floats. Assumes 18 decimals — true for APE and ETH."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return 0.0
+    if isinstance(raw, str):
+        try:
+            return float(Decimal(raw) / (Decimal(10) ** 18))
+        except Exception:
+            return 0.0
+    return float(raw) / 1e18
+
+
+def category_totals_across_games(
+    engine: Engine,
+    categories: List[str],
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> pd.DataFrame:
+    """Sum a set of categories across every tracker in the DB.
+
+    Used by the Executive Summary page to compute, for example,
+    "total ape.church protocol fee income across all games" in a single query.
+
+    Returns: DataFrame with columns [game, category, token, amount_raw, amount].
+    """
+    if not categories:
+        return pd.DataFrame(
+            columns=["game", "category", "token", "amount_raw", "amount"]
+        )
+    placeholders = ",".join(f":c{i}" for i in range(len(categories)))
+    clauses = [f"category IN ({placeholders})"]
+    params: Dict[str, object] = {f"c{i}": c for i, c in enumerate(categories)}
+    if start_ts is not None:
+        clauses.append("ts >= :s")
+        params["s"] = start_ts
+    if end_ts is not None:
+        clauses.append("ts <= :e")
+        params["e"] = end_ts
+    q = text(
+        f"""
+        SELECT game, category, token,
+               SUM(CAST(amount_raw AS REAL)) AS amount_raw
+        FROM flows
+        WHERE {' AND '.join(clauses)}
+        GROUP BY game, category, token
+        ORDER BY amount_raw DESC
+        """
+    )
+    df = pd.read_sql(q, engine, params=params)
+    if df.empty:
+        df["amount"] = pd.Series(dtype=float)
+        return df
+    df["amount"] = df["amount_raw"].apply(_native_amount)
+    return df
+
+
+def lifetime_revenue(
+    engine: Engine,
+    revenue_categories: List[str],
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> float:
+    """Single scalar: total APE revenue across every tracker in the DB,
+    summed across the given revenue categories. Used for the big headline
+    card on the Executive Summary page.
+
+    For Ape Church, `revenue_categories` is typically something like:
+        ["ape_church_fee", "fee_from_ape_church_fee_receiver", "nft_royalty"]
+    — i.e. every category name across trackers that represents money that
+    ultimately lands with us.
+    """
+    df = category_totals_across_games(engine, revenue_categories, start_ts, end_ts)
+    if df.empty:
+        return 0.0
+    return float(df["amount"].sum())
+
+
+def daily_revenue_stacked(
+    engine: Engine,
+    revenue_categories: List[str],
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> pd.DataFrame:
+    """Daily revenue per (game, category) for the Executive Summary stacked
+    area chart. Returns columns [day, game, category, amount]."""
+    if not revenue_categories:
+        return pd.DataFrame(columns=["day", "game", "category", "amount"])
+    placeholders = ",".join(f":c{i}" for i in range(len(revenue_categories)))
+    clauses = [f"category IN ({placeholders})"]
+    params: Dict[str, object] = {
+        f"c{i}": c for i, c in enumerate(revenue_categories)
+    }
+    if start_ts is not None:
+        clauses.append("ts >= :s")
+        params["s"] = start_ts
+    if end_ts is not None:
+        clauses.append("ts <= :e")
+        params["e"] = end_ts
+    q = text(
+        f"""
+        SELECT date(ts, 'unixepoch') AS day,
+               game, category,
+               SUM(CAST(amount_raw AS REAL)) AS amount_raw
+        FROM flows
+        WHERE {' AND '.join(clauses)}
+        GROUP BY day, game, category
+        ORDER BY day
+        """
+    )
+    df = pd.read_sql(q, engine, params=params)
+    if df.empty:
+        df["amount"] = pd.Series(dtype=float)
+        return df
+    df["amount"] = df["amount_raw"].apply(_native_amount)
+    return df
+
+
+def top_games(
+    engine: Engine,
+    fee_category: str = "ape_church_fee",
+    limit: int = 10,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> pd.DataFrame:
+    """Top N games by protocol-fee revenue in a time window.
+
+    Returns columns [game, fees_ape, n_flows].
+    """
+    clauses = ["category = :cat"]
+    params: Dict[str, object] = {"cat": fee_category, "lim": limit}
+    if start_ts is not None:
+        clauses.append("ts >= :s")
+        params["s"] = start_ts
+    if end_ts is not None:
+        clauses.append("ts <= :e")
+        params["e"] = end_ts
+    q = text(
+        f"""
+        SELECT game,
+               SUM(CAST(amount_raw AS REAL)) AS amount_raw,
+               COUNT(*) AS n_flows
+        FROM flows
+        WHERE {' AND '.join(clauses)}
+        GROUP BY game
+        ORDER BY amount_raw DESC
+        LIMIT :lim
+        """
+    )
+    df = pd.read_sql(q, engine, params=params)
+    if df.empty:
+        df["fees_ape"] = pd.Series(dtype=float)
+        return df
+    df["fees_ape"] = df["amount_raw"].apply(_native_amount)
+    return df[["game", "fees_ape", "n_flows"]]
+
+
+def all_trackers_health(engine: Engine) -> pd.DataFrame:
+    """One row per tracker summarizing sync state, reconciliation, and
+    UNLABELED backlog. Used on the System Health page.
+
+    Columns: [game, last_block, flow_count, unlabeled_count, recon_ok, recon_bad].
+    """
+    q = text(
+        """
+        SELECT
+          s.game,
+          s.last_block,
+          COALESCE(f.flow_count,     0) AS flow_count,
+          COALESCE(f.unlabeled_count, 0) AS unlabeled_count,
+          COALESCE(r.recon_ok,       0) AS recon_ok,
+          COALESCE(r.recon_bad,      0) AS recon_bad
+        FROM sync_state s
+        LEFT JOIN (
+          SELECT game,
+                 COUNT(*) AS flow_count,
+                 SUM(CASE WHEN category LIKE 'UNLABELED%' THEN 1 ELSE 0 END)
+                   AS unlabeled_count
+          FROM flows
+          GROUP BY game
+        ) f ON f.game = s.game
+        LEFT JOIN (
+          SELECT game,
+                 SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS recon_ok,
+                 SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS recon_bad
+          FROM block_reconciliation
+          GROUP BY game
+        ) r ON r.game = s.game
+        ORDER BY s.game
+        """
+    )
+    return pd.read_sql(q, engine)
+
+
+def all_distinct_categories(engine: Engine) -> List[str]:
+    """Every category that currently appears in the DB. Useful for
+    'revenue_categories' auto-detection."""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT DISTINCT category FROM flows ORDER BY category")
+        ).fetchall()
+    return [r[0] for r in rows]
