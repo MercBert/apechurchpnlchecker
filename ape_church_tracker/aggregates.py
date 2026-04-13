@@ -15,8 +15,13 @@ from sqlalchemy.engine import Engine
 
 
 def _apply_decimals(df: pd.DataFrame, tokens: Dict[str, dict]) -> pd.DataFrame:
-    """Convert `amount_raw` (string base units) to a float `amount` column
-    using the decimals info from the game config.
+    """Convert `amount_raw` base-unit values to a float `amount` column using
+    the decimals info from the game config.
+
+    `amount_raw` can be either a string (per-row queries) or a float (aggregate
+    queries that SUM CAST(amount_raw AS REAL) in SQL). Both are handled.
+    Int64 is *not* used because summed totals routinely exceed int64 max
+    (e.g. 1M APE in wei = 1e24, int64 caps at ~9.2e18).
     """
     if df.empty:
         df["amount"] = pd.Series(dtype=float)
@@ -26,7 +31,18 @@ def _apply_decimals(df: pd.DataFrame, tokens: Dict[str, dict]) -> pd.DataFrame:
     def decode(row):
         meta = tokens.get(row["token"]) or tokens.get("native") or {"decimals": 18, "symbol": row["token"]}
         dec = int(meta.get("decimals", 18))
-        return float(Decimal(row["amount_raw"]) / (Decimal(10) ** dec))
+        raw = row["amount_raw"]
+        # Strings — exact decimal math.
+        if isinstance(raw, str):
+            try:
+                return float(Decimal(raw) / (Decimal(10) ** dec))
+            except Exception:
+                return 0.0
+        # Floats (from SQL SUM) — direct divide. Float64 has 15-17 digits of
+        # precision which is plenty for display (we show 4-6 decimals).
+        if raw is None or pd.isna(raw):
+            return 0.0
+        return float(raw) / (10 ** dec)
 
     def symbol(row):
         meta = tokens.get(row["token"])
@@ -51,7 +67,6 @@ def kpis(engine: Engine, game: str, tokens: Dict[str, dict]) -> pd.DataFrame:
         """
     )
     df = pd.read_sql(q, engine, params={"g": game})
-    df["amount_raw"] = df["amount_raw"].astype("Int64").astype(str)
     return _apply_decimals(df, tokens)
 
 
@@ -84,7 +99,6 @@ def daily_breakdown(
         """
     )
     df = pd.read_sql(q, engine, params=params)
-    df["amount_raw"] = df["amount_raw"].astype("Int64").astype(str)
     return _apply_decimals(df, tokens)
 
 
@@ -106,7 +120,6 @@ def unlabeled_counterparties(
         """
     )
     df = pd.read_sql(q, engine, params={"g": game})
-    df["amount_raw"] = df["amount_raw"].astype("Int64").astype(str)
     return _apply_decimals(df, tokens)
 
 
