@@ -487,6 +487,23 @@ def backfill_native_game(
             )
             rec["internals"].append((it.trace_id, it.from_addr, it.to_addr, it.value_wei))
 
+        # Enrich missing tx_from via RPC. When a player interacts with the
+        # game through a router/proxy contract, the external tx's `to` is the
+        # router (not the game), so Apescan's txlist(game) doesn't return it —
+        # we only see the internal calls. Without tx_from we can't classify
+        # outbound flows back to the player as 'payout'. Fetch the outer tx
+        # directly for each such tx_hash so classification works.
+        for tx_hash, rec in per_tx.items():
+            if rec["tx_from"]:
+                continue
+            try:
+                tx = with_retry(lambda h=tx_hash: w3.eth.get_transaction(h))
+                rec["tx_from"] = tx["from"].lower()
+                rec["tx_to"] = (tx.get("to") or "").lower()
+                rec["value"] = int(tx["value"])
+            except Exception as exc:
+                log.warning("get_transaction(%s) failed: %s", tx_hash, exc)
+
         fls: List[dict] = []
         for tx_hash, rec in per_tx.items():
             flows_native = classify_native_flows(
@@ -564,6 +581,101 @@ def backfill_native_game(
         window = min(settings.indexer_window, int(window * 1.5) + 1)
 
 
+def run_reclassify_native(settings: Settings, game_name: Optional[str]) -> None:
+    """Retroactively fix UNLABELED native flows by fetching tx.from via RPC.
+
+    Use-case: when a player calls the game through a router/proxy contract,
+    Apescan's `txlist(game)` doesn't return the outer tx, so we index the
+    internal transfers with no `tx.from` context and can't identify payouts
+    back to the player. This walks every distinct tx_hash that has
+    `UNLABELED` outbound flows, fetches the real `tx.from`, and rewrites
+    the category to 'payout' for any outflow where counterparty == tx.from.
+
+    Only uses the RPC (no Apescan calls), so it's cheap to re-run.
+    """
+    engine = get_engine(settings.db_path)
+    w3 = make_web3(settings.rpc_url)
+    if not w3.is_connected():
+        log.error("could not connect to RPC %s", settings.rpc_url)
+        return
+    configs = [load_game_config(game_name)] if game_name else load_all_game_configs()
+    for cfg in configs:
+        if not cfg.native_only:
+            log.info("[%s] not native-only, skipping reclassify-native", cfg.name)
+            continue
+
+        # 1. Collect every distinct tx_hash that has an UNLABELED out-flow.
+        from sqlalchemy import text  # local import to keep top clean
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT DISTINCT tx_hash
+                    FROM flows
+                    WHERE game = :g
+                      AND direction = 'out'
+                      AND category LIKE 'UNLABELED%'
+                    """
+                ),
+                {"g": cfg.name},
+            ).fetchall()
+
+        tx_hashes = [r[0] for r in rows]
+        if not tx_hashes:
+            log.info("[%s] no UNLABELED outbound flows to reclassify", cfg.name)
+            continue
+
+        log.info("[%s] reclassifying %d txs via eth.get_transaction", cfg.name, len(tx_hashes))
+
+        updated = 0
+        for i, tx_hash in enumerate(tx_hashes, start=1):
+            try:
+                tx = with_retry(lambda h=tx_hash: w3.eth.get_transaction(h))
+            except Exception as exc:
+                log.warning("get_transaction(%s) failed: %s", tx_hash, exc)
+                continue
+            tx_from_lower = tx["from"].lower()
+
+            with engine.begin() as conn:
+                res = conn.execute(
+                    text(
+                        """
+                        UPDATE flows
+                        SET category = 'payout', label_name = 'player payout'
+                        WHERE game = :g
+                          AND tx_hash = :tx
+                          AND direction = 'out'
+                          AND category = 'UNLABELED'
+                          AND counterparty = :cp
+                        """
+                    ),
+                    {"g": cfg.name, "tx": tx_hash, "cp": tx_from_lower},
+                )
+                updated += res.rowcount or 0
+                # Also mark any inbound where counterparty == tx_from as 'wager' if still unclassified
+                conn.execute(
+                    text(
+                        """
+                        UPDATE flows
+                        SET category = 'wager', label_name = NULL
+                        WHERE game = :g
+                          AND tx_hash = :tx
+                          AND direction = 'in'
+                          AND category = 'UNLABELED_IN'
+                          AND counterparty = :cp
+                        """
+                    ),
+                    {"g": cfg.name, "tx": tx_hash, "cp": tx_from_lower},
+                )
+
+            if i % 50 == 0:
+                log.info("[%s] reclassify progress: %d/%d txs (%d flows updated)",
+                         cfg.name, i, len(tx_hashes), updated)
+
+        log.info("[%s] reclassified %d out-flows as payouts", cfg.name, updated)
+
+
 def run_relabel(settings: Settings, game_name: Optional[str]) -> None:
     engine = get_engine(settings.db_path)
     configs = [load_game_config(game_name)] if game_name else load_all_game_configs()
@@ -589,12 +701,21 @@ def main() -> None:
     ap.add_argument("--game", help="run only this game (by config name)")
     ap.add_argument("--once", action="store_true", help="catch up to head and exit")
     ap.add_argument("--relabel", action="store_true", help="rewrite flow categories from config and exit")
+    ap.add_argument(
+        "--reclassify-native",
+        action="store_true",
+        help="retroactively fix UNLABELED native flows by fetching tx.from via RPC (classifies player payouts in router-wrapped txs)",
+    )
     args = ap.parse_args()
 
     settings = load_settings()
 
     if args.relabel:
         run_relabel(settings, args.game)
+        return
+
+    if args.reclassify_native:
+        run_reclassify_native(settings, args.game)
         return
 
     engine = get_engine(settings.db_path)

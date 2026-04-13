@@ -101,29 +101,52 @@ def main() -> None:
 
     wagers = _sum(kpi_df, "wager")
     payouts = _sum(kpi_df, "payout")
-    protocol = _sum(kpi_df, "protocol_fee")
-    partner = _sum(kpi_df, "partner_fee")
-    house = _sum(kpi_df, "house")
-    jackpot = _sum(kpi_df, "jackpot_pool")
-    referral = _sum(kpi_df, "referral")
 
-    symbols = sorted(set(list(wagers) + list(payouts) + list(protocol)))
+    # Dynamic per-category totals: every category that isn't wager/payout/UNLABELED
+    # gets its own headline metric. This way custom categories the user defines
+    # in config.labels (fee_distributor_primary, oracle_fee, etc.) show up here
+    # automatically — not just the hardcoded protocol_fee/partner_fee/house/etc.
+    outflow_cats_df = kpi_df[
+        (~kpi_df["category"].isin(["wager", "payout"]))
+        & (~kpi_df["category"].str.startswith("UNLABELED"))
+    ]
+    fee_cats = sorted(outflow_cats_df["category"].unique().tolist())
+
+    symbols = sorted(set(list(wagers) + list(payouts)))
     if not symbols:
         st.info("No flows recorded yet. Run the indexer first: `python -m ape_church_tracker.indexer`")
     for sym in symbols:
-        cols = st.columns(6)
-        cols[0].metric(f"Wagers in ({sym})", _fmt_amount(wagers.get(sym, 0)))
-        cols[1].metric(f"Payouts out ({sym})", _fmt_amount(payouts.get(sym, 0)))
-        cols[2].metric(f"ape.church protocol ({sym})", _fmt_amount(protocol.get(sym, 0)))
-        cols[3].metric(f"Partner fees ({sym})", _fmt_amount(partner.get(sym, 0)))
-        cols[4].metric(f"House ({sym})", _fmt_amount(house.get(sym, 0)))
-        cols[5].metric(f"Jackpot pool ({sym})", _fmt_amount(jackpot.get(sym, 0)))
+        # Top row: wagers + payouts + net + effective house edge
+        top = st.columns(4)
         w = wagers.get(sym, 0)
-        edge = (w - payouts.get(sym, 0)) / w * 100 if w else 0
+        p = payouts.get(sym, 0)
+        top[0].metric(f"Wagers in ({sym})", _fmt_amount(w))
+        top[1].metric(f"Payouts out ({sym})", _fmt_amount(p))
+        top[2].metric(f"Net contract PNL ({sym})", _fmt_amount(w - p))
+        edge = (w - p) / w * 100 if w else 0
+        top[3].metric(f"House edge ({sym})", f"{edge:.2f}%")
+
+        # Second row: one metric per fee category defined in the config.
+        if fee_cats:
+            cat_cols = st.columns(min(len(fee_cats), 6) or 1)
+            for i, cat in enumerate(fee_cats):
+                sub = kpi_df[(kpi_df["category"] == cat) & (kpi_df["token_symbol"] == sym)]
+                amount = float(sub["amount"].sum()) if not sub.empty else 0.0
+                # Use the first human-readable label_name we can find, if any
+                label_name = None
+                if not sub.empty:
+                    # amount column is derived; fetch label via separate query
+                    pass
+                cat_cols[i % len(cat_cols)].metric(
+                    f"{cat} ({sym})",
+                    _fmt_amount(amount),
+                )
+
         st.caption(
-            f"**Net contract PNL ({sym})**: {_fmt_amount(w - payouts.get(sym, 0))}  •  "
-            f"**Effective house edge**: {edge:.2f}%  •  "
-            f"**Referral ({sym})**: {_fmt_amount(referral.get(sym, 0))}"
+            f"Fee categories above come from `config/games/{game_name}.json`. "
+            "Edit `labels` there and run "
+            f"`python -m ape_church_tracker.indexer --relabel --game {game_name}` "
+            "to re-tag without re-indexing."
         )
 
     # ----- Unlabeled alert card -----------------------------------------------
