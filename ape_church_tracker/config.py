@@ -44,6 +44,16 @@ class GameConfig(BaseModel):
     events: EventMapping = Field(default_factory=EventMapping)
     labels: Dict[str, LabelConfig] = Field(default_factory=dict)
 
+    # Classification of "self" flows — where the counterparty is the tx's
+    # caller (tx.from). Customize per tracker type:
+    #   - Game contract:  self_in=wager,          self_out=payout
+    #   - Claim manager:  self_in=self_deposit,   self_out=player_claim
+    #   - House staking:  self_in=stake_in,       self_out=unstake_out
+    #   - Plain wallet:   self_in=self_in,        self_out=self_out
+    # Defaults are game-oriented for backward compat.
+    self_in_category: str = "wager"
+    self_out_category: str = "payout"
+
     # Resolved at load time
     abi: List[dict] = Field(default_factory=list)
 

@@ -1,0 +1,16 @@
+{
+  "$comment": "Decentralized House contract — stakers (including ape.church's Deployer and Treasury wallets) stake APE to act as the house and earn yield. Blizzard Blitz routes losing-spin APE here; players stake/unstake and claim yield. 'stake_in' / 'unstake_out' are used for flows where counterparty == tx.from (typical staker interaction).",
+  "name": "house",
+  "address": "0x2054709f89f18a4ccac6132ace7b812e32608469",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "stake_in",
+  "self_out_category": "unstake_out",
+  "labels": {
+    "0x64b27c1c69559a795c98958614398dd7195ae1b8": {"category": "loss_from_blizzard_blitz", "name": "Blizzard Blitz game contract"},
+    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "ape_church_deployer_stake", "name": "Ape Church Deployer wallet"},
+    "0xb5c3a66741e21cd80ebdda25479b10a98ea80c52": {"category": "ape_church_treasury_stake", "name": "Ape Church Treasury multisig"}
+  }
+}

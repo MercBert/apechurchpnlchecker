@@ -1,16 +1,17 @@
 {
-  "$comment": "Blizzard Blitz cascade slot on ape.church. Native-APE game — wagers arrive as msg.value; fees/payouts go out as internal transactions. Contract is unverified so no ABI; we classify by counterparty, not by event.",
-  "$discover_labels": [
-    "Run: python scripts/inspect_tx.py blizzard_blitz 0x45c32a21ab454291bfb30f90577c492b9280821eddbc710a30d7bfe550c0ece4",
-    "It will print every internal transaction from the game contract and tell you which counterparties are still UNLABELED.",
-    "Paste each address into the 'labels' dict below with a category: 'protocol_fee' | 'partner_fee' | 'house' | 'jackpot_pool' | 'referral' | or a custom name.",
-    "Hint from the reference tx: one address starts with 0x20852d and ends in 697da5f51 (takes ~89% of the 5% fee); another starts with 0x258f9Ead and ends in d36f98563 (takes ~10%)."
-  ],
+  "$comment": "Blizzard Blitz cascade slot on ape.church. Native-APE game. Every spin's wager gets split 5 ways: ~4.46% to the Ape Church fee receiver, ~small fixed cost to the Pyth fee receiver, winnings routed to the Claim Manager, and losing-spin remainder routed to the decentralized House.",
   "name": "blizzard_blitz",
   "address": "0x64b27c1c69559A795C98958614398dD7195AE1B8",
   "start_block": 0,
   "tokens": {
     "native": {"symbol": "APE", "decimals": 18}
   },
-  "labels": {}
+  "self_in_category": "wager",
+  "self_out_category": "payout",
+  "labels": {
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "ape_church_fee", "name": "Ape Church fee receiver"},
+    "0x258f9ead08d35955fc80678658d9cdfd36f98563": {"category": "pyth_fee",       "name": "Pyth fee receiver"},
+    "0xd2a5c5f58bdbed24ef919d9dfb312ca84e7b31dd": {"category": "claim_manager",  "name": "Claim Manager (pending winnings)"},
+    "0x2054709f89f18a4ccac6132ace7b812e32608469": {"category": "house",          "name": "House contract"}
+  }
 }

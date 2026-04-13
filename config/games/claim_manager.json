@@ -1,0 +1,16 @@
+{
+  "$comment": "Claim Manager — Blizzard Blitz routes winnings here. Players call claim() to withdraw. Outflows where counterparty == tx.from are classified as 'player_claim'. Inflows from Blizzard Blitz are labeled 'deposit_from_blizzard_blitz'.",
+  "name": "claim_manager",
+  "address": "0xd2a5c5f58bdbed24ef919d9dfb312ca84e7b31dd",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "self_deposit",
+  "self_out_category": "player_claim",
+  "labels": {
+    "0x64b27c1c69559a795c98958614398dd7195ae1b8": {"category": "deposit_from_blizzard_blitz", "name": "Blizzard Blitz game contract"},
+    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "to_ape_church_deployer", "name": "Ape Church Deployer wallet"},
+    "0xb5c3a66741e21cd80ebdda25479b10a98ea80c52": {"category": "to_ape_church_treasury", "name": "Ape Church Treasury multisig"}
+  }
+}

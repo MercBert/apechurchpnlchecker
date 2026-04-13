@@ -261,28 +261,36 @@ def insert_many_ignore(conn, table: Table, rows: Iterable[dict]) -> int:
     return len(rows)
 
 
-def relabel_flows(engine: Engine, game: str, label_map: Dict[str, dict]) -> int:
+def relabel_flows(
+    engine: Engine,
+    game: str,
+    label_map: Dict[str, dict],
+    self_in_category: str = "wager",
+    self_out_category: str = "payout",
+) -> int:
     """Rewrite category/label_name for existing flows based on label_map.
 
     Also resets rows whose counterparty is no longer in the map back to
-    UNLABELED — so removing a label takes effect too.
+    UNLABELED — so removing a label takes effect too. `self_in_category`
+    and `self_out_category` are preserved (they come from tx.from matching,
+    not from the label map).
 
     Returns the number of rows updated.
     """
     updated = 0
     with engine.begin() as conn:
-        # Reset everything that isn't a `wager` or `payout` (those come from
-        # game-event enrichment and aren't tied to the address label map).
+        # Reset everything that isn't the tracker's self-out category
+        # (which comes from tx.from matching, not from the address labels).
         conn.execute(
             text(
                 """
                 UPDATE flows SET category = 'UNLABELED', label_name = NULL
                 WHERE game = :g
                   AND direction = 'out'
-                  AND category NOT IN ('payout')
+                  AND category != :self_out
                 """
             ),
-            {"g": game},
+            {"g": game, "self_out": self_out_category},
         )
         conn.execute(
             text(
@@ -290,10 +298,10 @@ def relabel_flows(engine: Engine, game: str, label_map: Dict[str, dict]) -> int:
                 UPDATE flows SET category = 'UNLABELED_IN', label_name = NULL
                 WHERE game = :g
                   AND direction = 'in'
-                  AND category NOT IN ('wager')
+                  AND category != :self_in
                 """
             ),
-            {"g": game},
+            {"g": game, "self_in": self_in_category},
         )
         for addr, meta in label_map.items():
             res = conn.execute(

@@ -1,0 +1,18 @@
+{
+  "$comment": "Ape Church Deployer wallet — receives protocol fees from the fee receiver, stakes into the House to earn yield, and periodically moves profits to the treasury multisig. This is the operational 'hot wallet' for Ape Church revenue.",
+  "name": "ape_church_deployer",
+  "address": "0x0d69B1D26F56DEE4449f5ED3998B0380aAa2FE40",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "self_in",
+  "self_out_category": "self_out",
+  "labels": {
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "fee_from_ape_church_fee_receiver", "name": "Ape Church fee receiver"},
+    "0x2054709f89f18a4ccac6132ace7b812e32608469": {"category": "house_stake_or_yield",  "name": "House contract (stake/yield)"},
+    "0xd2a5c5f58bdbed24ef919d9dfb312ca84e7b31dd": {"category": "claim_manager",         "name": "Claim Manager"},
+    "0x64b27c1c69559a795c98958614398dd7195ae1b8": {"category": "blizzard_blitz_contract","name": "Blizzard Blitz game contract"},
+    "0xb5c3a66741e21cd80ebdda25479b10a98ea80c52": {"category": "profit_to_treasury",    "name": "Ape Church Treasury multisig"}
+  }
+}

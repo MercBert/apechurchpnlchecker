@@ -1,0 +1,17 @@
+{
+  "$comment": "Ape Church Treasury multisig — long-term profit storage. Receives transfers from the Deployer wallet; occasionally stakes into the House to earn yield or moves funds out. This is the 'cold wallet' for Ape Church revenue.",
+  "name": "ape_church_treasury",
+  "address": "0xb5C3a66741E21CD80eBdDa25479B10A98Ea80c52",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "self_in",
+  "self_out_category": "self_out",
+  "labels": {
+    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "profit_from_deployer", "name": "Ape Church Deployer wallet"},
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "fee_from_ape_church_fee_receiver", "name": "Ape Church fee receiver"},
+    "0x2054709f89f18a4ccac6132ace7b812e32608469": {"category": "house_stake_or_yield", "name": "House contract (stake/yield)"},
+    "0xd2a5c5f58bdbed24ef919d9dfb312ca84e7b31dd": {"category": "claim_manager",        "name": "Claim Manager"}
+  }
+}

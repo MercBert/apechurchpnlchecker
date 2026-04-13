@@ -46,6 +46,8 @@ def _games() -> List[dict]:
             "address": c.address,
             "tokens": {k: v.model_dump() for k, v in c.tokens.items()},
             "is_placeholder": c.is_placeholder,
+            "self_in_category": c.self_in_category,
+            "self_out_category": c.self_out_category,
         }
         for c in load_all_game_configs()
     ]
@@ -93,61 +95,85 @@ def main() -> None:
     kpi_df = kpis(engine, game_name, tokens)
 
     # ----- Headline KPIs ------------------------------------------------------
-    st.subheader("Lifetime totals")
+    st.subheader(f"Lifetime totals — {game_name}")
+    st.caption(f"Tracked address: `{game['address']}`")
 
-    def _sum(df: pd.DataFrame, category: str) -> Dict[str, float]:
-        sub = df[df["category"] == category]
-        return sub.groupby("token_symbol")["amount"].sum().to_dict()
+    # Total-in and total-out per token symbol.
+    def _sum_dir(df: pd.DataFrame, direction: str) -> Dict[str, float]:
+        sub = df[df["direction"] == direction] if "direction" in df.columns else df.iloc[0:0]
+        return sub.groupby("token_symbol")["amount"].sum().to_dict() if not sub.empty else {}
 
-    wagers = _sum(kpi_df, "wager")
-    payouts = _sum(kpi_df, "payout")
+    # kpi_df is grouped by (token, category) and doesn't carry direction;
+    # fetch a second query grouped by direction too.
+    from sqlalchemy import text as _sql_text
+    dir_rows = pd.read_sql(
+        _sql_text(
+            """
+            SELECT token, direction, SUM(CAST(amount_raw AS REAL)) AS amount_raw
+            FROM flows
+            WHERE game = :g
+            GROUP BY token, direction
+            """
+        ),
+        engine,
+        params={"g": game_name},
+    )
+    # Manually apply decimals since dir_rows isn't shaped like kpi_df.
+    def _decode_native(row):
+        meta = tokens.get(row["token"]) or {"decimals": 18, "symbol": row["token"]}
+        dec = int(meta.get("decimals", 18))
+        return float(row["amount_raw"] or 0) / (10 ** dec)
+    def _symbol(row):
+        meta = tokens.get(row["token"]) or {}
+        return meta.get("symbol", row["token"][:8])
+    if not dir_rows.empty:
+        dir_rows["amount"] = dir_rows.apply(_decode_native, axis=1)
+        dir_rows["token_symbol"] = dir_rows.apply(_symbol, axis=1)
+    total_in = _sum_dir(dir_rows, "in")
+    total_out = _sum_dir(dir_rows, "out")
 
-    # Dynamic per-category totals: every category that isn't wager/payout/UNLABELED
-    # gets its own headline metric. This way custom categories the user defines
-    # in config.labels (fee_distributor_primary, oracle_fee, etc.) show up here
-    # automatically — not just the hardcoded protocol_fee/partner_fee/house/etc.
-    outflow_cats_df = kpi_df[
-        (~kpi_df["category"].isin(["wager", "payout"]))
-        & (~kpi_df["category"].str.startswith("UNLABELED"))
-    ]
-    fee_cats = sorted(outflow_cats_df["category"].unique().tolist())
-
-    symbols = sorted(set(list(wagers) + list(payouts)))
+    symbols = sorted(set(list(total_in) + list(total_out)))
     if not symbols:
-        st.info("No flows recorded yet. Run the indexer first: `python -m ape_church_tracker.indexer`")
-    for sym in symbols:
-        # Top row: wagers + payouts + net + effective house edge
-        top = st.columns(4)
-        w = wagers.get(sym, 0)
-        p = payouts.get(sym, 0)
-        top[0].metric(f"Wagers in ({sym})", _fmt_amount(w))
-        top[1].metric(f"Payouts out ({sym})", _fmt_amount(p))
-        top[2].metric(f"Net contract PNL ({sym})", _fmt_amount(w - p))
-        edge = (w - p) / w * 100 if w else 0
-        top[3].metric(f"House edge ({sym})", f"{edge:.2f}%")
-
-        # Second row: one metric per fee category defined in the config.
-        if fee_cats:
-            cat_cols = st.columns(min(len(fee_cats), 6) or 1)
-            for i, cat in enumerate(fee_cats):
-                sub = kpi_df[(kpi_df["category"] == cat) & (kpi_df["token_symbol"] == sym)]
-                amount = float(sub["amount"].sum()) if not sub.empty else 0.0
-                # Use the first human-readable label_name we can find, if any
-                label_name = None
-                if not sub.empty:
-                    # amount column is derived; fetch label via separate query
-                    pass
-                cat_cols[i % len(cat_cols)].metric(
-                    f"{cat} ({sym})",
-                    _fmt_amount(amount),
-                )
-
-        st.caption(
-            f"Fee categories above come from `config/games/{game_name}.json`. "
-            "Edit `labels` there and run "
-            f"`python -m ape_church_tracker.indexer --relabel --game {game_name}` "
-            "to re-tag without re-indexing."
+        st.info(
+            "No flows recorded yet. Run the indexer first:\n"
+            f"`python -m ape_church_tracker.indexer --once --game {game_name}`"
         )
+
+    for sym in symbols:
+        tin = total_in.get(sym, 0.0)
+        tout = total_out.get(sym, 0.0)
+        net = tin - tout
+        top = st.columns(3)
+        top[0].metric(f"Total in ({sym})", _fmt_amount(tin))
+        top[1].metric(f"Total out ({sym})", _fmt_amount(tout))
+        top[2].metric(
+            f"Net ({sym})",
+            _fmt_amount(net),
+            delta=f"{(net / tin * 100):.2f}% of in" if tin else None,
+        )
+
+        # Every category that has data (excluding UNLABELED) gets its own metric.
+        sym_df = kpi_df[kpi_df["token_symbol"] == sym]
+        if not sym_df.empty:
+            cat_rows = (
+                sym_df[~sym_df["category"].str.startswith("UNLABELED")]
+                .groupby("category")["amount"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            if len(cat_rows) > 0:
+                st.caption("**Per-category breakdown** (lifetime)")
+                n_cols = min(len(cat_rows), 4)
+                cat_cols = st.columns(n_cols)
+                for i, (cat, amount) in enumerate(cat_rows.items()):
+                    cat_cols[i % n_cols].metric(f"{cat} ({sym})", _fmt_amount(amount))
+
+    st.caption(
+        f"Categories come from `config/games/{game_name}.json`. "
+        "Edit the `labels` dict and run "
+        f"`python -m ape_church_tracker.indexer --relabel --game {game_name}` "
+        "to re-tag without re-indexing."
+    )
 
     # ----- Unlabeled alert card -----------------------------------------------
     unlabeled = unlabeled_counterparties(engine, game_name, tokens)

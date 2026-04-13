@@ -515,6 +515,8 @@ def backfill_native_game(
                 internal_txs=list(rec["internals"]),  # type: ignore[arg-type]
                 game_address=cfg.address,
                 label_map=label_map,
+                self_in_category=cfg.self_in_category,
+                self_out_category=cfg.self_out_category,
             )
             for f in flows_native:
                 fls.append(
@@ -642,7 +644,7 @@ def run_reclassify_native(settings: Settings, game_name: Optional[str]) -> None:
                     text(
                         """
                         UPDATE flows
-                        SET category = 'payout', label_name = 'player payout'
+                        SET category = :out_cat, label_name = NULL
                         WHERE game = :g
                           AND tx_hash = :tx
                           AND direction = 'out'
@@ -650,15 +652,19 @@ def run_reclassify_native(settings: Settings, game_name: Optional[str]) -> None:
                           AND counterparty = :cp
                         """
                     ),
-                    {"g": cfg.name, "tx": tx_hash, "cp": tx_from_lower},
+                    {
+                        "g": cfg.name,
+                        "tx": tx_hash,
+                        "cp": tx_from_lower,
+                        "out_cat": cfg.self_out_category,
+                    },
                 )
                 updated += res.rowcount or 0
-                # Also mark any inbound where counterparty == tx_from as 'wager' if still unclassified
                 conn.execute(
                     text(
                         """
                         UPDATE flows
-                        SET category = 'wager', label_name = NULL
+                        SET category = :in_cat, label_name = NULL
                         WHERE game = :g
                           AND tx_hash = :tx
                           AND direction = 'in'
@@ -666,7 +672,12 @@ def run_reclassify_native(settings: Settings, game_name: Optional[str]) -> None:
                           AND counterparty = :cp
                         """
                     ),
-                    {"g": cfg.name, "tx": tx_hash, "cp": tx_from_lower},
+                    {
+                        "g": cfg.name,
+                        "tx": tx_hash,
+                        "cp": tx_from_lower,
+                        "in_cat": cfg.self_in_category,
+                    },
                 )
 
             if i % 50 == 0:
@@ -686,7 +697,13 @@ def run_relabel(settings: Settings, game_name: Optional[str]) -> None:
             if not addr.startswith("0xFILL_ME")
         }
         upsert_labels(engine, cfg.name, {addr: meta for addr, meta in label_map.items()})
-        updated = relabel_flows(engine, cfg.name, label_map)
+        updated = relabel_flows(
+            engine,
+            cfg.name,
+            label_map,
+            self_in_category=cfg.self_in_category,
+            self_out_category=cfg.self_out_category,
+        )
         log.info("[%s] relabeled %d flows", cfg.name, updated)
 
 

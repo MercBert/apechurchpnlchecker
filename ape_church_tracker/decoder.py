@@ -287,6 +287,8 @@ def classify_native_flows(
     internal_txs: List[Tuple[int, str, str, int]],
     game_address: str,
     label_map: Dict[str, dict],
+    self_in_category: str = "wager",
+    self_out_category: str = "payout",
 ) -> List[Flow]:
     """Build Flow rows for a native-APE tx.
 
@@ -297,27 +299,26 @@ def classify_native_flows(
     tx_value_wei          : `msg.value` on the outer call (wei)
     internal_txs          : list of (trace_id, from, to, value_wei) for every
                             internal call where game is sender or receiver.
-                            `trace_id` is used to build a deterministic
-                            composite log_index so rows are idempotent.
     game_address          : the game contract (checksum or any case)
     label_map             : {lowercase_address: {"category":..., "name":...}}
+    self_in_category      : category for inbound flows where counterparty ==
+                            tx.from (game: 'wager', claim_mgr: 'self_deposit')
+    self_out_category     : category for outbound flows where counterparty ==
+                            tx.from (game: 'payout', claim_mgr: 'player_claim')
 
-    Classification:
-      - inbound with counterparty == tx_from → category 'wager'
-        (the player sent APE as msg.value)
-      - outbound with counterparty == tx_from → category 'payout'
-        (the contract is sending APE back to the player in the same tx)
-      - outbound with counterparty in label_map → use the label's category
-      - everything else → 'UNLABELED' / 'UNLABELED_IN'
+    Classification precedence:
+      1. counterparty address found in label_map → use its category
+      2. counterparty == tx.from → self_in_category / self_out_category
+      3. default → 'UNLABELED' / 'UNLABELED_IN'
     """
     game_lower = game_address.lower()
     tx_from_lower = (tx_from or "").lower()
     out: List[Flow] = []
 
     # 1. Outer `msg.value` — an implicit inbound flow from tx.from to tx.to
-    #    (the game contract). We give it a stable, reserved log_index of -1.
+    #    (the tracked contract). We give it a stable, reserved log_index of -1.
     if tx_value_wei > 0 and tx_to.lower() == game_lower:
-        category = "wager"  # player → game
+        category = self_in_category  # e.g. 'wager' for a game
         label_name: Optional[str] = None
         # If the sender is actually a labeled address, respect the label.
         lbl = label_map.get(tx_from_lower)
@@ -338,7 +339,7 @@ def classify_native_flows(
             )
         )
 
-    # 2. Internal txs where the game contract is from or to.
+    # 2. Internal txs where the tracked contract is from or to.
     for trace_id_raw, ifrom, ito, ivalue in internal_txs:
         if ivalue <= 0:
             continue
@@ -358,9 +359,9 @@ def classify_native_flows(
             category = lbl["category"]
             label_name = lbl["name"]
         elif direction == "out" and counterparty == tx_from_lower:
-            category = "payout"
+            category = self_out_category  # e.g. 'payout' for a game
         elif direction == "in" and counterparty == tx_from_lower:
-            category = "wager"
+            category = self_in_category
 
         # trace_id may look like "0", "0_1", "call_3", etc. We encode it
         # into an integer log_index by hashing. Collisions within a single
