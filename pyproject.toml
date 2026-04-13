@@ -1,0 +1,24 @@
+[project]
+name = "ape-church-tracker"
+version = "0.1.0"
+description = "Local indexer + Streamlit dashboard that tracks every APE flowing through ape.church games (starting with Blizzard Blitz) on Ape Chain."
+requires-python = ">=3.10"
+dependencies = [
+    "web3>=6.15",
+    "eth-utils>=2.3",
+    "eth-abi>=5.0",
+    "streamlit>=1.33",
+    "pandas>=2.0",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.5",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+    "altair>=5.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ape_church_tracker*"]

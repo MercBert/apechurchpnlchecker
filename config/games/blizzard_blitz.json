@@ -1,0 +1,19 @@
+{
+  "$comment": "Fill this in with real values before running the indexer. Placeholders are marked 0xFILL_ME or FILL_ME.",
+  "name": "blizzard_blitz",
+  "address": "0xFILL_ME_BLIZZARD_BLITZ_CONTRACT",
+  "abi_path": "config/games/blizzard_blitz.abi.json",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "events": {
+    "wager": "Wager",
+    "payout": "Payout"
+  },
+  "labels": {
+    "0xFILL_ME_APE_CHURCH_PROTOCOL_FEE_WALLET": {"category": "protocol_fee", "name": "ape.church protocol"},
+    "0xFILL_ME_HOUSE_TREASURY":                 {"category": "house",        "name": "house treasury"},
+    "0xFILL_ME_JACKPOT_POOL":                   {"category": "jackpot_pool", "name": "progressive jackpot"}
+  }
+}
