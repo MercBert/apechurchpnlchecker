@@ -85,6 +85,13 @@ class Apescan:
 
     # ---- plumbing --------------------------------------------------------
 
+    def _safe_url(self, url: str) -> str:
+        """Return `url` with the apikey value replaced by `***` so the key
+        never ends up in logs or error messages."""
+        if not self.api_key:
+            return url
+        return url.replace(self.api_key, "***")
+
     def _request(self, params: Dict[str, str]) -> Any:
         # Always include chainid for the v2 multichain endpoint.
         merged = {"chainid": self.chain_id, **params}
@@ -92,6 +99,7 @@ class Apescan:
             merged["apikey"] = self.api_key
         query = urllib.parse.urlencode(merged)
         url = f"{self.base_url}?{query}"
+        safe_url = self._safe_url(url)
 
         # simple client-side rate limit
         delta = time.monotonic() - self._last_call
@@ -113,7 +121,7 @@ class Apescan:
                 time.sleep(wait)
         else:
             raise ApescanError(
-                f"apescan request failed after retries: {last_exc} url={url}"
+                f"apescan request failed after retries: {last_exc} url={safe_url}"
             )
 
         import json  # local import keeps top-level import list short
@@ -121,13 +129,20 @@ class Apescan:
         body = json.loads(data)
         if body.get("status") == "1":
             return body.get("result", [])
-        # empty-range is reported as status=0 message="No transactions found"
+        # Some endpoints return status=0 with an "empty result" message that
+        # isn't really an error — translate those to [] instead of raising.
         msg = str(body.get("message", "")).lower()
-        if msg in {"no transactions found", "no records found"}:
+        empty_messages = {
+            "no transactions found",
+            "no records found",
+            "no data found",
+            "notok",  # sometimes returned for truly empty but valid queries
+        }
+        if msg in empty_messages:
             return []
         raise ApescanError(
             f"apescan error: status={body.get('status')} message={body.get('message')} "
-            f"result={body.get('result')} url={url}"
+            f"result={body.get('result')} url={safe_url}"
         )
 
     # ---- endpoints -------------------------------------------------------
@@ -197,10 +212,12 @@ class Apescan:
         ]
 
     def contract_creation_block(self, address: str) -> Optional[int]:
-        """Look up the block a contract was deployed at.
+        """Return the earliest block with activity for `address`.
 
-        Uses `contract.getcontractcreation` when available, otherwise falls
-        back to the first tx in `txlist`.
+        For contracts, `contract.getcontractcreation` returns the deploy block
+        directly. For EOAs / wallets it returns "No data found" (silently
+        empty now). In both cases we fall back to the first entry in
+        `txlist` — which works for any address that has sent at least one tx.
         """
         try:
             result = self._request(
@@ -211,20 +228,13 @@ class Apescan:
                 }
             )
             if result:
-                tx = result[0].get("txHash") or result[0].get("transactionHash")
-                if tx:
-                    first = self._request(
-                        {
-                            "module": "proxy",
-                            "action": "eth_getTransactionByHash",
-                            "txhash": tx,
-                        }
-                    )
-                    if isinstance(first, dict) and "blockNumber" in first:
-                        return int(first["blockNumber"], 16)
+                first = result[0]
+                # Prefer `blockNumber` if the endpoint returns it.
+                if "blockNumber" in first:
+                    return int(first["blockNumber"])
         except ApescanError as exc:
-            log.warning("getcontractcreation failed: %s", exc)
+            log.debug("getcontractcreation not available for %s: %s", address, exc)
 
-        # Fallback: first external tx involving the address.
+        # Fallback: first external tx where the address is from or to.
         txs = self.txlist(address, 0, 99999999)
         return txs[0].block_number if txs else None
