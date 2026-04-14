@@ -1,0 +1,14 @@
+{
+  "$comment": "ReferralManager — receives referral cuts from FeeReceiver (typically ~13-20% of post-discount platform fees). Players claim accrued referral rewards from here. Tracking this lets us see total referral volume and identify top referrers.",
+  "name": "referral_manager",
+  "address": "0x885482a0840dDb4F1dB8565B116195c009cC070a",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "self_in",
+  "self_out_category": "player_referral_claim",
+  "labels": {
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "in_from_ape_church_fee_receiver", "name": "Ape Church fee receiver"}
+  }
+}

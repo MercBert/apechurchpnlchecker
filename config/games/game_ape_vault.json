@@ -1,0 +1,16 @@
+{
+  "$comment": "GameApeVault — receives 35% of every FeeReceiver residual sweep (triggerETH). Funds APE rewards in the GP loot shop. Part of Ape Church's revenue even though it's earmarked for player rewards.",
+  "name": "game_ape_vault",
+  "address": "0xf467d9AaFD051A290fB93D3eA67014966816D753",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "self_in",
+  "self_out_category": "self_out",
+  "labels": {
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "fee_from_ape_church_fee_receiver", "name": "Ape Church fee receiver (35% sweep)"},
+    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "to_ape_church_deployer",            "name": "Ape Church Deployer wallet"},
+    "0xb5c3a66741e21cd80ebdda25479b10a98ea80c52": {"category": "to_ape_church_treasury",            "name": "Ape Church Treasury multisig"}
+  }
+}

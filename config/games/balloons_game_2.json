@@ -1,0 +1,17 @@
+{
+  "$comment": "Balloons game contract #2 (partner: Balloons, 50% cut at FeeReceiver level)",
+  "name": "balloons_game_2",
+  "address": "0x0717330c1a9e269a0e034aBB101c8d32Ac0e9600",
+  "start_block": 0,
+  "tokens": {
+    "native": {"symbol": "APE", "decimals": 18}
+  },
+  "self_in_category": "wager",
+  "self_out_category": "payout",
+  "labels": {
+    "0xd208520d57036ad72cffbeccf038c58697da5f51": {"category": "ape_church_fee", "name": "Ape Church fee receiver"},
+    "0x258f9ead08d35955fc80678658d9cdfd36f98563": {"category": "pyth_fee",       "name": "Pyth fee receiver"},
+    "0xd2a5c5f58bdbed24ef919d9dfb312ca84e7b31dd": {"category": "claim_manager",  "name": "Claim Manager"},
+    "0x2054709f89f18a4ccac6132ace7b812e32608469": {"category": "house",          "name": "House contract"}
+  }
+}

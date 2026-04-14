@@ -1,5 +1,5 @@
 {
-  "$comment": "Ape Church fee receiver — receives the ~4.46% protocol fee from Blizzard Blitz (and likely other ape.church games), then distributes to downstream wallets including the Ape Church Deployer. Tracking this lets us see the real split between Ape Church's cut and any partner splits downstream.",
+  "$comment": "Ape Church FeeReceiver — the fee waterfall contract. Every game contract on the platform routes its platform fee here via takeFee(). Then distributes via: GP discount (held), referral cut (to ReferralManager), partner cut (to 1 of 5 partner wallets), and finally triggerETH() which sweeps the balance 65/35 to deployer/GameApeVault. This tracker captures both the inflows (from every game) and all the outflows (to referrals, partners, deployer, vault).",
   "name": "ape_church_fee_receiver",
   "address": "0xd208520d57036ad72cffbeccf038c58697da5f51",
   "start_block": 0,
@@ -9,8 +9,24 @@
   "self_in_category": "self_in",
   "self_out_category": "self_out",
   "labels": {
-    "0x64b27c1c69559a795c98958614398dd7195ae1b8": {"category": "fee_from_blizzard_blitz", "name": "Blizzard Blitz game contract"},
-    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "to_ape_church_deployer", "name": "Ape Church Deployer wallet"},
-    "0xb5c3a66741e21cd80ebdda25479b10a98ea80c52": {"category": "to_ape_church_treasury", "name": "Ape Church Treasury multisig"}
+    "0x64b27c1c69559a795c98958614398dd7195ae1b8": {"category": "fee_from_blizzard_blitz",       "name": "Blizzard Blitz game contract"},
+    "0xc936d6691737afe5240975622f0597fa2d122fad": {"category": "fee_from_balloons_1",           "name": "Balloons game #1"},
+    "0x0717330c1a9e269a0e034abb101c8d32ac0e9600": {"category": "fee_from_balloons_2",           "name": "Balloons game #2"},
+    "0x40ee3295035901e5fd80703774e5a9fe7ce2b90c": {"category": "fee_from_balloons_3",           "name": "Balloons game #3"},
+    "0x17e219844f25f3fed6e422ddaffd2e6557ebced3": {"category": "fee_from_balloons_4",           "name": "Balloons game #4"},
+    "0x59ebd3406b76dcc74102afa2ca5284e9aab6ba28": {"category": "fee_from_balloons_5",           "name": "Balloons game #5"},
+    "0x5e405198b349d6522bbb614e7391bdc4f4f6f681": {"category": "fee_from_balloons_6",           "name": "Balloons game #6"},
+    "0xb02b13adb8eaafe1f41ec942612c4a4862b74d1d": {"category": "fee_from_geez_diggers",         "name": "Geez (Diggers) game contract"},
+    "0xaf107530b56f86ecd59f03a93fb5044f32e02ae9": {"category": "fee_from_cult_quest",           "name": "Cult Quest game contract"},
+    "0x5b44ce34300d1b8d32b5a6119f192e3eda74e144": {"category": "fee_from_glyders",              "name": "Glyders game contract"},
+    "0xc1046a6b4c01512803772b25f72d9f6ff27f94a7": {"category": "fee_from_mod",                  "name": "MOD game contract"},
+    "0x885482a0840ddb4f1db8565b116195c009cc070a": {"category": "to_referral_manager",           "name": "ReferralManager"},
+    "0x68b1ccd2fc53925efd90284fa7fee662c564cd19": {"category": "to_partner_balloons",           "name": "Partner: Balloons (50% cut)"},
+    "0x148d3122554ead2dea02d3e1a5bb2d5d1e5b27e1": {"category": "to_partner_geez",               "name": "Partner: Geez (50% cut)"},
+    "0x14398d9ac62c2bfb20b594ee08fd972e4be866e9": {"category": "to_partner_cult_quest",         "name": "Partner: Cult Quest (30% cut)"},
+    "0x88282e766594645867778763feac696d4aaf3a36": {"category": "to_partner_glyders",            "name": "Partner: Glyders (30% cut)"},
+    "0xaa41806018ad31b232b15f2c5a4d5de834cadb86": {"category": "to_partner_mod",                "name": "Partner: MOD (30% cut)"},
+    "0x0d69b1d26f56dee4449f5ed3998b0380aaa2fe40": {"category": "sweep_to_ape_church_deployer",  "name": "Ape Church Deployer wallet (65% sweep)"},
+    "0xf467d9aafd051a290fb93d3ea67014966816d753": {"category": "sweep_to_game_ape_vault",       "name": "GameApeVault (35% sweep)"}
   }
 }

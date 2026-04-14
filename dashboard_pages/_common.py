@@ -15,15 +15,22 @@ from ape_church_tracker.config import load_all_game_configs, load_settings
 from ape_church_tracker.db import get_engine
 
 
-# Canonical category names we treat as "Ape Church revenue" for the
-# Executive Summary headline. Any category a tracker has that starts with
-# one of these prefixes counts as revenue. We use prefix matching so that
-# per-game naming variations (e.g. `ape_church_fee_from_blizzard_blitz`)
-# still roll up cleanly.
+# Categories the Executive Summary counts as "Ape Church revenue".
+# We pick terminal-destination categories only, never intermediate hops,
+# so the same APE isn't counted twice as it flows through multiple trackers.
+#
+# Correct path for a wager on a Blizzard Blitz-style game:
+#   game.ape_church_fee  →  fee_receiver.*  →  deployer.fee_from_ape_church_fee_receiver
+#                                            ↘  game_ape_vault.fee_from_ape_church_fee_receiver
+#
+# We count only the last step (the terminal destination). The earlier
+# `ape_church_fee` category on the game contract sees the same money
+# passing through FeeReceiver — including it would triple-count.
+#
+# `nft_royalty` is the equivalent terminal category on the (future)
+# NFT royalty tracker.
 REVENUE_CATEGORY_PREFIXES: Tuple[str, ...] = (
-    "ape_church_fee",
     "fee_from_ape_church_fee_receiver",
-    "profit_from_deployer",
     "nft_royalty",
 )
 
